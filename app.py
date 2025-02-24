@@ -325,7 +325,7 @@ def main():
             
             # Update collaboration subheadline with discount info
             if discount_percentage > 0:
-                collaboration_subheadline = f"{collaboration_subheadline} Plus, enjoy {discount_percentage}% off on all {clean_destination_url} products!"
+                collaboration_subheadline = f"{collaboration_subheadline} Plus, enjoy {discount_percentage}% off on all products!"
                 
             # Prepare context for template
             context = {
