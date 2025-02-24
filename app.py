@@ -10,6 +10,16 @@ import random
 import os
 import hashlib
 
+# Global currency symbols dictionary
+CURRENCY_SYMBOLS = {
+    'USD': '$',
+    'GBP': '£',
+    'EUR': '€',
+    'JPY': '¥',
+    'AUD': 'A$',
+    'CAD': 'C$',
+}
+
 def get_preview_id():
     """Generate a unique preview ID"""
     return hashlib.md5(str(random.randint(0, 1000000)).encode()).hexdigest()[:8]
@@ -110,7 +120,18 @@ def get_logo_url(url):
         st.error(f"Error fetching logo: {str(e)}")
     return None
 
-def get_products(url, is_origin=False):
+def format_price(price, currency):
+    """Format price with appropriate currency symbol"""
+    symbol = CURRENCY_SYMBOLS.get(currency, currency + ' ')
+    return f"{symbol}{float(price):.2f}"
+
+def get_products(url, is_origin=False, currency='USD'):
+    """Fetch products from a Shopify store
+    Args:
+        url: Store URL
+        is_origin: Whether this is the origin store
+        currency: Currency to use for price formatting (default: USD)
+    """
     products = []
     try:
         # Ensure the URL ends with /products.json
@@ -118,12 +139,35 @@ def get_products(url, is_origin=False):
             base_url = url.rstrip('/')
             url = f"{base_url}/products.json"
         
+        # Try the original URL first
         response = requests.get(url)
         
-        # Check if the request was successful and returns JSON
+        # If that fails, try the myshopify.com version
         if response.status_code != 200:
-            st.error("Please provide a valid Shopify store URL. The URL should be from a Shopify store.")
-            return products
+            # Extract domain from URL
+            parsed_url = urlparse(url)
+            domain = parsed_url.netloc.split(':')[0]  # Remove port if present
+            
+            # Remove any existing .myshopify.com
+            domain = domain.replace('.myshopify.com', '')
+            
+            # Remove www. if present
+            if domain.startswith('www.'):
+                domain = domain[4:]
+            
+            # Extract the main domain name (remove TLD)
+            domain_parts = domain.split('.')
+            if len(domain_parts) > 1:
+                domain = domain_parts[0]  # Take just the first part before any dots
+            
+            # Create myshopify URL
+            myshopify_url = f"https://{domain}.myshopify.com/products.json"
+            st.info(f"Trying alternate URL: {myshopify_url}")  # Debug info
+            response = requests.get(myshopify_url)
+            
+            if response.status_code != 200:
+                st.error("Please provide a valid Shopify store URL. The URL should be from a Shopify store.")
+                return products
             
         try:
             data = response.json()
@@ -134,24 +178,31 @@ def get_products(url, is_origin=False):
         # For origin store, return a random product
         if is_origin and data.get('products'):
             product = random.choice(data['products'])
-            return {
-                'name': product.get('title', ''),
-                'price': f"${float(product['variants'][0]['price']):.2f}" if product.get('variants') else 'N/A',
-                'image': product['images'][0]['src'] if product.get('images') else None,
-                'variant_id': product['variants'][0]['id'] if product.get('variants') else None
-            }
+            variant = product['variants'][0] if product.get('variants') else None
+            if variant:
+                return {
+                    'name': product.get('title', ''),
+                    'price': format_price(variant['price'], currency) if variant.get('price') else 'N/A',
+                    'image': product['images'][0]['src'] if product.get('images') else None,
+                    'variant_id': variant['id'],
+                    'currency': currency
+                }
+            return None
         
         # For destination store, process up to 5 products
         for product in data.get('products', [])[:5]:
-            product_info = {
-                'name': product.get('title', ''),
-                'price': f"${float(product['variants'][0]['price']):.2f}" if product.get('variants') else 'N/A',
-                'image': product['images'][0]['src'] if product.get('images') else None,
-                'variant_id': product['variants'][0]['id'] if product.get('variants') else None
-            }
-            
-            if all(product_info.values()):
-                products.append(product_info)
+            variant = product['variants'][0] if product.get('variants') else None
+            if variant:
+                product_info = {
+                    'name': product.get('title', ''),
+                    'price': format_price(variant['price'], currency) if variant.get('price') else 'N/A',
+                    'image': product['images'][0]['src'] if product.get('images') else None,
+                    'variant_id': variant['id'],
+                    'currency': currency
+                }
+                
+                if all(product_info.values()):
+                    products.append(product_info)
                 
     except Exception as e:
         st.error(f"Error fetching products: {str(e)}")
@@ -183,6 +234,33 @@ def main():
     # Format URLs
     origin_url = format_url(origin_url)
     destination_url = format_url(destination_url)
+    
+    # Available currencies
+    currencies = {
+        'USD': 'US Dollar ($)',
+        'GBP': 'British Pound (£)',
+        'EUR': 'Euro (€)',
+        'JPY': 'Japanese Yen (¥)',
+        'AUD': 'Australian Dollar (A$)',
+        'CAD': 'Canadian Dollar (C$)'
+    }
+    
+    # Currency selection
+    col1, col2 = st.columns(2)
+    with col1:
+        origin_currency = st.selectbox(
+            "Origin Store Currency",
+            options=list(currencies.keys()),
+            format_func=lambda x: currencies[x],
+            index=0
+        )
+    with col2:
+        destination_currency = st.selectbox(
+            "Destination Store Currency",
+            options=list(currencies.keys()),
+            format_func=lambda x: currencies[x],
+            index=0
+        )
     
     # Input fields for collaboration text and discount
     col1, col2, col3 = st.columns(3)
@@ -230,13 +308,13 @@ def main():
                 is_text_logo = True
             
             # Get random product from origin store
-            origin_product = get_products(origin_url, is_origin=True)
+            origin_product = get_products(origin_url, is_origin=True, currency=origin_currency)
             if not origin_product:
                 st.error("Could not fetch products from origin store")
                 return
                 
             # Get products from destination store
-            destination_products = get_products(destination_url)
+            destination_products = get_products(destination_url, currency=destination_currency)
             if len(destination_products) < 5:
                 st.error("Could not fetch enough products from destination store")
                 return
@@ -263,10 +341,11 @@ def main():
             
             # Add destination products to context with discounted prices
             for i, product in enumerate(destination_products[:5], 1):
-                original_price = float(product['price'].replace('$', ''))
+                currency = product['currency']
+                original_price = float(product['price'].replace(CURRENCY_SYMBOLS.get(currency, currency + ' '), ''))
                 discounted_price = original_price * (1 - discount_percentage / 100)
                 
-                price_display = product['price'] if discount_percentage == 0 else f'<span style="text-decoration: line-through">${original_price:.2f}</span> <span style="color: #ff0000">${discounted_price:.2f}</span>'
+                price_display = product['price'] if discount_percentage == 0 else f'<span style="text-decoration: line-through">{format_price(original_price, currency)}</span> <span style="color: #ff0000">{format_price(discounted_price, currency)}</span>'
                 
                 context[f'destination_store_product_{i}_image'] = product['image']
                 context[f'destination_store_product_{i}_title'] = product['name']
